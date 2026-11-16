@@ -58,20 +58,34 @@ else:
 # PCA9685 — инициализация
 # ============================================================
 
-MODE1 = 0x00
-MODE2 = 0x01
-PRESCALE = 0xFE
+MODE1 = 0x00  # адрес регистра Mode 1 (общие настройки чипа)
+MODE2 = 0x01  # адрес регистра Mode 2 (настройки выходов)
+PRESCALE = 0xFE  # адрес регистра предделителя частоты ШИМ
 
 def write_reg(reg, value):
     port.write_to(reg, bytes([value]))
 
 # Настройка частоты ШИМ 1000 Гц
-mode1 = port.read_from(MODE1, 1)[0]
-write_reg(MODE1, (mode1 & 0x7F) | 0x10)   # SLEEP
+mode1 = port.read_from(MODE1, 1)[0]  #  Чтение текущего MODE1 (Возвращает массив байтов и читает 1 байт из регистра MODE1 (0x00))
+    # Нужно, чтобы не сбросить важные биты, которые уже настроены в MODE1 (например, RESTART, AI, EXTCLK).
+    # Так сохраняется текущее состояние, чтобы потом вернуть его с изменениями.
+write_reg(MODE1, (mode1 & 0x7F) | 0x10)  # SLEEP
+    # mode1 & 0x7F — берёт текущее значение mode1 и сбрасывает бит 7 (RESTART).
+    # | 0x10 — устанавливает бит 4 (SLEEP) в 1.
+    # Чип уходит в спящий режим. ШИМ-генератор останавливается. Это нужно, чтобы безопасно изменить частоту в PRESCALE
 prescale = int(25000000 / (4096 * 1000) - 1)
+    # 25000000 — внутренняя частота осциллятора PCA9685 (25 МГц).
+    # 4096 — количество шагов ШИМ (12 бит, от 0 до 4095).
+    # 1000 — желаемая частота ШИМ в герцах.
 write_reg(PRESCALE, prescale)
-write_reg(MODE1, mode1 & 0x7F)            # WAKE
-write_reg(MODE2, 0x04)                    # totem-pole output
+    # Записывает 5 в регистр 0xFE. Теперь чип знает: «чтобы получить 1000 Гц, дели частоту 25 МГц на 5+1 и ещё на 4096».
+write_reg(MODE1, mode1 & ~0x90)  # Сброс RESTART и SLEEP  # WAKE
+    # Берёт сохранённое значение mode1 и сбрасывает бит 7 (RESTART)
+    # Чип просыпается. ШИМ-генератор запускается с новой частотой.
+write_reg(MODE2, 0x04)  # Настройка выходов (totem-pole output)
+    # 0x04 - устанавливает бит 2 (OUTDRV) в 1.
+    # OUTDRV = 1 → выходы работают в режиме totem-pole (push-pull): могут активно тянуть вверх (к V+) и вниз (к GND).
+    # OUTDRV = 0 → выходы open-drain: только тянут вниз, вверх — через внешний pull-up.
 
 print("\nPCA9685 инициализирован\n")
 
@@ -89,15 +103,16 @@ try:
         base = LED0_ON_L + 4 * ch
 
         # Full ON: ON_H = 0x10 (бит 4)
-        write_reg(base + 1, 0x10)   # LEDx_ON_H = Full ON
-        write_reg(base + 3, 0x00)   # LEDx_OFF_H = 0
+        write_reg(base + 1, 0x10)  # LEDx_ON_H = Full ON
+        write_reg(base + 3, 0x00)  # LEDx_OFF_H = 0
+        data = port.read_from(base, 4)
 
         print(f"  Канал {ch} (регистр 0x{base:02X}) — ВКЛ")
         time.sleep(1)
 
         # Выключаем: Full OFF
         write_reg(base + 1, 0x00)
-        write_reg(base + 3, 0x10)   # LEDx_OFF_H = Full OFF
+        write_reg(base + 3, 0x10)  # LEDx_OFF_H = Full OFF
         print(f"  Канал {ch} — выкл")
 
 except KeyboardInterrupt:
@@ -107,8 +122,9 @@ finally:
     # Гасим все каналы (Full OFF)
     for ch in range(16):
         base = LED0_ON_L + 4 * ch
+        # Выключаем: Full OFF
         write_reg(base + 1, 0x00)
-        write_reg(base + 3, 0x10)
+        write_reg(base + 3, 0x10)  # LEDx_OFF_H = Full OFF
 
     gpio.write(0x00)
     i2c.terminate()
